@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import '../../core/constants/api_constants.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/debug_helper.dart';
 import '../../services/auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -26,19 +28,29 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
-    if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
-      
-      final authService = Provider.of<AuthService>(context, listen: false);
-      
-      try {
-        // Clear any existing tokens before attempting login
-        await authService.logout();
-        
-        final result = await authService.login(
-          _emailController.text.trim(),
-          _passwordController.text,
-        );
+    if (!_formKey.currentState!.validate()) {
+      DebugHelper.log('Login skipped: form validation failed');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final email = _emailController.text.trim();
+
+    DebugHelper.log('Login button pressed — calling API', {
+      'url': ApiConstants.loginUrl,
+      'email': email,
+    });
+
+    try {
+      // Local-only: do not call logout API before login (was masking login in server logs)
+      await authService.clearLocalSession();
+
+      final result = await authService.login(
+        email,
+        _passwordController.text,
+      );
         
         if (mounted) {
           setState(() => _isLoading = false);
@@ -81,18 +93,18 @@ class _LoginScreenState extends State<LoginScreen> {
             );
           }
         }
-      } catch (e) {
-        if (mounted) {
-          setState(() => _isLoading = false);
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Unexpected error: ${e.toString()}'),
-              backgroundColor: AppColors.error,
-              duration: const Duration(seconds: 5),
-            ),
-          );
-        }
+    } catch (e, st) {
+      DebugHelper.logError('Login screen unexpected error', e, st);
+      if (mounted) {
+        setState(() => _isLoading = false);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unexpected error: ${e.toString()}'),
+            backgroundColor: AppColors.error,
+            duration: const Duration(seconds: 5),
+          ),
+        );
       }
     }
   }

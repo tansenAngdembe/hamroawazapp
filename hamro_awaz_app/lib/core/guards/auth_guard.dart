@@ -39,6 +39,7 @@ class _AuthGuardState extends State<AuthGuard> {
       final accessToken = await authService.getAccessToken();
       if (accessToken == null) {
         DebugHelper.log('AuthGuard: No access token found');
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
           _isAuthenticated = false;
@@ -66,6 +67,7 @@ class _AuthGuardState extends State<AuthGuard> {
 
         if (user != null) {
           DebugHelper.log('AuthGuard: Authentication successful', user.toJson());
+          if (!mounted) return;
           setState(() {
             _isLoading = false;
             _isAuthenticated = true;
@@ -81,6 +83,7 @@ class _AuthGuardState extends State<AuthGuard> {
             role: UserRole.citizen,
           );
           DebugHelper.log('AuthGuard: Authenticated with fallback user', user.toJson());
+          if (!mounted) return;
           setState(() {
             _isLoading = false;
             _isAuthenticated = true;
@@ -90,6 +93,7 @@ class _AuthGuardState extends State<AuthGuard> {
         }
       } else {
         DebugHelper.log('AuthGuard: Authentication failed', authResult);
+        if (!mounted) return;
         setState(() {
           _isLoading = false;
           _isAuthenticated = false;
@@ -98,6 +102,7 @@ class _AuthGuardState extends State<AuthGuard> {
       }
     } catch (e) {
       DebugHelper.logError('AuthGuard: Error during authentication check', e);
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _isAuthenticated = false;

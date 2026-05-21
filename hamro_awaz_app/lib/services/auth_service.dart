@@ -1,9 +1,16 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/api/api_client.dart';
+import '../core/api/public_dio_client.dart';
 import '../core/constants/api_constants.dart';
 import '../core/utils/debug_helper.dart';
+import '../core/utils/network_helper.dart';
 import '../models/user.dart';
 
 class AuthService {
@@ -13,8 +20,13 @@ class AuthService {
 
   // Get access token from storage
   Future<String?> getAccessToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_accessTokenKey);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_accessTokenKey);
+    } catch (e, st) {
+      DebugHelper.logError('getAccessToken failed', e, st);
+      return null;
+    }
   }
 
   // Get refresh token from storage
@@ -28,6 +40,12 @@ class AuthService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_accessTokenKey, accessToken);
     await prefs.setString(_refreshTokenKey, refreshToken);
+  }
+
+  /// Clears stored tokens/user only (no network). Use before login.
+  Future<void> clearLocalSession() async {
+    DebugHelper.log('Clearing local session (no API call)');
+    await _clearTokens();
   }
 
   // Clear tokens from storage
@@ -162,46 +180,61 @@ class AuthService {
     }
   }
 
+  String _connectionErrorMessage(Object error) {
+    if (error is DioException) {
+      return PublicDioClient.instance.messageFromError(error);
+    }
+    if (error is SocketException) {
+      return NetworkHelper.unreachableMessage();
+    }
+    if (error is TimeoutException) {
+      return NetworkHelper.unreachableMessage();
+    }
+    if (error is http.ClientException) {
+      return 'Connection error: ${error.message}';
+    }
+    return 'Network error: $error';
+  }
+
   // Login user
   Future<Map<String, dynamic>> login(String email, String password) async {
+    DebugHelper.log('AuthService.login invoked', {
+      'url': ApiConstants.loginUrl,
+      'email': email.trim(),
+    });
+
     try {
-      final url = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.login}');
-      final body = jsonEncode({'email': email, 'password': password});
-      final headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      };
-      
-      DebugHelper.logApiCall('POST', url.toString(), headers, body);
-      
-      final response = await http.post(
-        url,
-        headers: headers,
-        body: body,
-      ).timeout(const Duration(seconds: 30));
+      if (!await NetworkHelper.canReachServer()) {
+        return {
+          'success': false,
+          'message': NetworkHelper.unreachableMessage(),
+        };
+      }
 
-      DebugHelper.logApiResponse(response.statusCode, response.body);
+      final dio = PublicDioClient.instance.dio;
+      final response = await dio.post<Map<String, dynamic>>(
+        ApiConstants.login,
+        data: {
+          'email': email.trim(),
+          'password': password,
+        },
+        options: Options(
+          responseType: ResponseType.json,
+          contentType: Headers.jsonContentType,
+        ),
+      );
 
-      // Handle empty response
-      if (response.body.isEmpty) {
+      final statusCode = response.statusCode ?? 0;
+      final responseData = response.data;
+
+      if (responseData == null || responseData.isEmpty) {
         return {
           'success': false,
           'message': 'Empty response from server',
         };
       }
 
-      Map<String, dynamic> responseData;
-      try {
-        responseData = jsonDecode(response.body) as Map<String, dynamic>;
-      } catch (e) {
-        DebugHelper.logError('JSON decode error in login', e);
-        return {
-          'success': false,
-          'message': 'Invalid JSON response from server: ${response.body}',
-        };
-      }
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (statusCode == 200 || statusCode == 201) {
         // Check if the response indicates success even with 200 status
         final httpStatus = responseData['httpStatus']?.toString();
         final code = responseData['code'];
@@ -215,7 +248,7 @@ class AuthService {
           return {
             'success': false,
             'message': errorMessage,
-            'statusCode': code ?? response.statusCode,
+            'statusCode': code ?? statusCode,
             'httpStatus': httpStatus,
           };
         }
@@ -327,41 +360,47 @@ class AuthService {
           errorMessage = responseData['message'].toString();
         } else if (responseData['error'] != null) {
           errorMessage = responseData['error'].toString();
-        } else if (response.statusCode == 401) {
+        } else if (statusCode == 401) {
           errorMessage = 'Invalid email or password';
-        } else if (response.statusCode == 400) {
+        } else if (statusCode == 400) {
           errorMessage = 'Invalid request. Please check your input.';
-        } else if (response.statusCode == 422) {
+        } else if (statusCode == 422) {
           errorMessage = responseData['message']?.toString() ?? 'Invalid credentials or account does not exist';
-        } else if (response.statusCode >= 500) {
+        } else if (statusCode >= 500) {
           errorMessage = 'Server error. Please try again later.';
         }
 
         return {
           'success': false,
           'message': errorMessage,
-          'statusCode': response.statusCode,
+          'statusCode': statusCode,
           'httpStatus': responseData['httpStatus'],
           'code': responseData['code'],
         };
       }
-    } on http.ClientException catch (e) {
-      DebugHelper.logError('HTTP Client error in login', e);
-      return {
-        'success': false,
-        'message': 'Connection error. Please check your internet connection.',
-      };
-    } on FormatException catch (e) {
-      DebugHelper.logError('Format error in login', e);
+    } on DioException catch (e, st) {
+      DebugHelper.logError('Login Dio error', e, st);
+      return {'success': false, 'message': _connectionErrorMessage(e)};
+    } on TimeoutException catch (e, st) {
+      DebugHelper.logError('Login timeout', e, st);
+      return {'success': false, 'message': _connectionErrorMessage(e)};
+    } on SocketException catch (e, st) {
+      DebugHelper.logError('Login socket error', e, st);
+      return {'success': false, 'message': _connectionErrorMessage(e)};
+    } on http.ClientException catch (e, st) {
+      DebugHelper.logError('HTTP Client error in login', e, st);
+      return {'success': false, 'message': _connectionErrorMessage(e)};
+    } on FormatException catch (e, st) {
+      DebugHelper.logError('Format error in login', e, st);
       return {
         'success': false,
         'message': 'Invalid server response format.',
       };
-    } catch (e) {
-      DebugHelper.logError('Login error', e);
+    } catch (e, st) {
+      DebugHelper.logError('Login error', e, st);
       return {
         'success': false,
-        'message': 'Network error: ${e.toString()}',
+        'message': _connectionErrorMessage(e),
       };
     }
   }

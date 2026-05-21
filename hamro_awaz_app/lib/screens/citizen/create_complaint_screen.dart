@@ -1,13 +1,30 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import 'dart:io';
 
 import '../../core/constants/api_constants.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/complaint.dart';
+import '../../models/create_complaint_request.dart';
+import '../../models/user_profile.dart';
+import '../../repositories/complaint_repository.dart';
+import '../../repositories/user_profile_repository.dart';
 import '../../services/auth_service.dart';
 import '../../services/complaint_service.dart';
+import '../../services/location_service.dart';
+import '../../widgets/picked_image_tile.dart';
+import '../../widgets/verification_required_panel.dart';
+import 'document_upload_screen.dart';
+
+enum _CreateComplaintPhase {
+  loadingProfile,
+  unverified,
+  pendingApproval,
+  verifiedForm,
+  profileError,
+}
 
 class CreateComplaintScreen extends StatefulWidget {
   const CreateComplaintScreen({super.key});
@@ -20,129 +37,199 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
   final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _municipalityIdController = TextEditingController();
-  final _latController = TextEditingController();
-  final _lngController = TextEditingController();
+
+  _CreateComplaintPhase _phase = _CreateComplaintPhase.loadingProfile;
+  String? _profileError;
+  UserProfile? _profile;
+  bool _documentsSubmitted = false;
 
   ComplaintCategory? _selectedCategory;
-  List<File> _selectedImages = [];
-  bool _isLoading = false;
+  File? _photo;
+  bool _isSubmitting = false;
+  bool _isResolvingLocation = false;
+  String? _locationStatus;
+  ComplaintCoordinates? _coordinates;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadProfile());
+  }
 
   @override
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
-    _municipalityIdController.dispose();
-    _latController.dispose();
-    _lngController.dispose();
     super.dispose();
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
+  Future<void> _loadProfile() async {
+    setState(() {
+      _phase = _CreateComplaintPhase.loadingProfile;
+      _profileError = null;
+    });
 
-    if (pickedFile != null) {
+    try {
+      final repo = context.read<UserProfileRepository>();
+      final result = await repo.fetchProfile();
+
+      if (!mounted) return;
+
+      if (!result.success || result.data == null) {
+        setState(() {
+          _phase = _CreateComplaintPhase.profileError;
+          _profileError = result.message;
+        });
+        return;
+      }
+
+      final profile = result.data!;
+      _profile = profile;
+
+      if (profile.isUserVerified) {
+        setState(() => _phase = _CreateComplaintPhase.verifiedForm);
+        _resolveLocation();
+      } else if (_documentsSubmitted) {
+        setState(() => _phase = _CreateComplaintPhase.pendingApproval);
+      } else {
+        setState(() => _phase = _CreateComplaintPhase.unverified);
+      }
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _selectedImages.add(File(pickedFile.path));
+        _phase = _CreateComplaintPhase.profileError;
+        _profileError = e.toString();
       });
     }
   }
 
-  void _removeImage(int index) {
-    setState(() {
-      _selectedImages.removeAt(index);
-    });
+  Future<void> _openDocumentUpload() async {
+    final result = await Navigator.of(context).push<DocumentUploadResult>(
+      MaterialPageRoute(builder: (_) => const DocumentUploadScreen()),
+    );
+
+    if (!mounted || result == null) return;
+
+    _documentsSubmitted = true;
+    if (result.profile != null) {
+      _profile = result.profile;
+    }
+
+    if (result.verified) {
+      setState(() => _phase = _CreateComplaintPhase.verifiedForm);
+      _resolveLocation();
+      _showSnack('Account verified. You can create complaints.', isError: false);
+    } else {
+      setState(() => _phase = _CreateComplaintPhase.pendingApproval);
+      _showSnack(
+        'Verification pending approval',
+        isError: false,
+      );
+    }
   }
 
-  double? _parseOptionalDouble(String raw) {
-    final t = raw.trim();
-    if (t.isEmpty) return null;
-    return double.tryParse(t);
+  Future<void> _resolveLocation() async {
+    setState(() {
+      _isResolvingLocation = true;
+      _locationStatus = 'Getting GPS location…';
+    });
+
+    try {
+      final locationService = context.read<LocationService>();
+      final result = await locationService.resolveComplaintCoordinates();
+      if (!mounted) return;
+      setState(() {
+        _coordinates = result.coordinates;
+        _locationStatus = result.warning ??
+            'Location: ${result.coordinates.latitude.toStringAsFixed(5)}, '
+                '${result.coordinates.longitude.toStringAsFixed(5)}';
+        _isResolvingLocation = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isResolvingLocation = false;
+        _locationStatus = 'Using default location (GPS unavailable)';
+        _coordinates = const ComplaintCoordinates(
+          latitude: ApiConstants.defaultLatitude,
+          longitude: ApiConstants.defaultLongitude,
+        );
+      });
+    }
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    final file = await PickedImageTile.pick(source);
+    if (file != null && mounted) setState(() => _photo = file);
   }
 
   Future<void> _submitComplaint() async {
-    if (_formKey.currentState!.validate()) {
-      if (_selectedCategory == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select a category')),
-        );
+    if (!_formKey.currentState!.validate()) return;
+    if (_selectedCategory == null) {
+      _showSnack('Please select a category', isError: true);
+      return;
+    }
+    if (_coordinates == null) {
+      await _resolveLocation();
+      if (_coordinates == null) {
+        _showSnack('Location is required. Enable GPS and try again.', isError: true);
         return;
-      }
-
-      final munId = _municipalityIdController.text.trim();
-      if (munId.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter municipality unique ID')),
-        );
-        return;
-      }
-
-      final auth = context.read<AuthService>();
-      final complaintService = context.read<ComplaintService>();
-      final user = await auth.getStoredUser();
-      if (user == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Please log in to submit a complaint'),
-              backgroundColor: AppColors.error,
-            ),
-          );
-        }
-        return;
-      }
-
-      setState(() => _isLoading = true);
-      final lat = _parseOptionalDouble(_latController.text);
-      final lng = _parseOptionalDouble(_lngController.text);
-
-      try {
-        final result = await complaintService.createComplaint(
-          title: _titleController.text.trim(),
-          description: _descriptionController.text.trim(),
-          category: _selectedCategory!,
-          municipalityUniqueId: munId,
-          userId: user.id,
-          imageFiles: _selectedImages,
-          latitude: lat,
-          longitude: lng,
-          departmentLabel: munId,
-        );
-
-        if (mounted) {
-          if (result['success'] == true) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(result['message']?.toString() ?? 'Complaint submitted'),
-                backgroundColor: AppColors.success,
-              ),
-            );
-            Navigator.of(context).pop();
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(result['message']?.toString() ?? 'Failed'),
-                backgroundColor: AppColors.error,
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor: AppColors.error,
-            ),
-          );
-        }
-      } finally {
-        if (mounted) {
-          setState(() => _isLoading = false);
-        }
       }
     }
+
+    final auth = context.read<AuthService>();
+    final complaintRepo = context.read<ComplaintRepository>();
+    final complaintService = context.read<ComplaintService>();
+
+    final user = await auth.getStoredUser();
+    if (!mounted) return;
+    if (user == null) {
+      _showSnack('Please log in again', isError: true);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    try {
+
+      final request = CreateComplaintRequest(
+        complaintTitle: _titleController.text.trim(),
+        complaintDescription: _descriptionController.text.trim(),
+        categoryId: _selectedCategory!.apiCategoryId,
+        complaintCoordinates: _coordinates!,
+      );
+
+      final result = await complaintRepo.createComplaint(
+        request: request,
+        photo: _photo,
+        userId: user.id,
+      );
+
+      if (!mounted) return;
+
+      if (result.success && result.data != null) {
+        await complaintService.cacheComplaintLocally(result.data!);
+        _showSnack(result.message, isError: false);
+        Navigator.of(context).pop();
+      } else {
+        _showSnack(result.message, isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnack('Error: $e', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  void _showSnack(String message, {required bool isError}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? AppColors.error : AppColors.success,
+      ),
+    );
   }
 
   @override
@@ -150,209 +237,257 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Create Complaint'),
+        actions: [
+          if (_phase == _CreateComplaintPhase.verifiedForm)
+            IconButton(
+              icon: const Icon(Icons.my_location),
+              tooltip: 'Refresh location',
+              onPressed: _isResolvingLocation ? null : _resolveLocation,
+            ),
+        ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
+      body: _buildBody(),
+    );
+  }
+
+  Widget _buildBody() {
+    switch (_phase) {
+      case _CreateComplaintPhase.loadingProfile:
+        return const Center(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              TextFormField(
-                controller: _titleController,
-                decoration: const InputDecoration(
-                  labelText: 'Complaint Title',
-                  hintText: 'Enter a brief title',
-                  prefixIcon: Icon(Icons.title),
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Checking account verification…'),
+            ],
+          ),
+        );
+
+      case _CreateComplaintPhase.unverified:
+        return VerificationRequiredPanel(
+          onUploadDocuments: _openDocumentUpload,
+        );
+
+      case _CreateComplaintPhase.pendingApproval:
+        return VerificationRequiredPanel(
+          isPendingApproval: true,
+          onUploadDocuments: _loadProfile,
+        );
+
+      case _CreateComplaintPhase.profileError:
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.error_outline, size: 48, color: AppColors.error),
+                const SizedBox(height: 12),
+                Text(
+                  _profileError ?? 'Could not load profile',
+                  textAlign: TextAlign.center,
                 ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter a title';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _descriptionController,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'Describe your complaint in detail (min 20 characters)',
-                  prefixIcon: Icon(Icons.description),
-                  alignLabelWithHint: true,
-                ),
-                maxLines: 5,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter a description';
-                  }
-                  if (value.length < 20) {
-                    return 'Description must be at least 20 characters';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _municipalityIdController,
-                decoration: const InputDecoration(
-                  labelText: 'Municipality unique ID',
-                  hintText: 'Backend municipalityUniqueId string',
-                  prefixIcon: Icon(Icons.location_city),
-                ),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<ComplaintCategory>(
-                value: _selectedCategory,
-                decoration: const InputDecoration(
-                  labelText: 'Category',
-                  prefixIcon: Icon(Icons.category),
-                ),
-                items: ComplaintCategory.values.map((category) {
-                  return DropdownMenuItem(
-                    value: category,
-                    child: Text(switch (category) {
-                      ComplaintCategory.infrastructure => 'Infrastructure',
-                      ComplaintCategory.sanitation => 'Sanitation',
-                      ComplaintCategory.waterSupply => 'Water Supply',
-                      ComplaintCategory.electricity => 'Electricity',
-                      ComplaintCategory.road => 'Road',
-                      ComplaintCategory.wasteManagement => 'Waste Management',
-                      ComplaintCategory.other => 'Other',
-                    }),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  setState(() => _selectedCategory = value);
-                },
-                validator: (value) {
-                  if (value == null) {
-                    return 'Please select a category';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Location (optional)',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _latController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                      decoration: const InputDecoration(
-                        labelText: 'Latitude',
-                        hintText: '${ApiConstants.defaultLatitude}',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _lngController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                      decoration: const InputDecoration(
-                        labelText: 'Longitude',
-                        hintText: '${ApiConstants.defaultLongitude}',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Add Photos (Optional)',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Camera'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.secondary,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Gallery'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.secondary,
-                    ),
-                  ),
-                ],
-              ),
-              if (_selectedImages.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                SizedBox(
-                  height: 100,
-                  child: ListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _selectedImages.length,
-                    itemBuilder: (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Stack(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.file(
-                                _selectedImages[index],
-                                width: 100,
-                                height: 100,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                            Positioned(
-                              top: 4,
-                              right: 4,
-                              child: CircleAvatar(
-                                radius: 12,
-                                backgroundColor: Colors.black54,
-                                child: IconButton(
-                                  padding: EdgeInsets.zero,
-                                  iconSize: 16,
-                                  icon: const Icon(Icons.close, color: Colors.white),
-                                  onPressed: () => _removeImage(index),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                ElevatedButton(
+                  onPressed: _loadProfile,
+                  child: const Text('Retry'),
                 ),
               ],
-              const SizedBox(height: 32),
-              ElevatedButton(
-                onPressed: _isLoading ? null : _submitComplaint,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            ),
+          ),
+        );
+
+      case _CreateComplaintPhase.verifiedForm:
+        return _buildComplaintForm();
+    }
+  }
+
+  Widget _buildComplaintForm() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_profile != null)
+                  Card(
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        child: Text(
+                          _profile!.fullName.isNotEmpty
+                              ? _profile!.fullName[0].toUpperCase()
+                              : '?',
                         ),
-                      )
-                    : const Text('Submit Complaint'),
-              ),
-            ],
+                      ),
+                      title: Text(_profile!.fullName),
+                      subtitle: Text(_profile!.email),
+                      trailing: const Icon(Icons.verified, color: AppColors.success),
+                    ),
+                  ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'Complaint Title',
+                    prefixIcon: Icon(Icons.title),
+                  ),
+                  validator: (v) =>
+                      v == null || v.trim().isEmpty ? 'Title is required' : null,
+                ),
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _descriptionController,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Description',
+                    hintText: 'At least 20 characters',
+                    prefixIcon: Icon(Icons.description),
+                    alignLabelWithHint: true,
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Description is required';
+                    }
+                    if (v.trim().length < 20) {
+                      return 'Description must be at least 20 characters';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<ComplaintCategory>(
+                  value: _selectedCategory,
+                  decoration: const InputDecoration(
+                    labelText: 'Category',
+                    prefixIcon: Icon(Icons.category),
+                  ),
+                  items: ComplaintCategory.values.map((c) {
+                    return DropdownMenuItem(
+                      value: c,
+                      child: Text(_categoryLabel(c)),
+                    );
+                  }).toList(),
+                  onChanged: _isSubmitting
+                      ? null
+                      : (v) => setState(() => _selectedCategory = v),
+                  validator: (v) => v == null ? 'Select a category' : null,
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  color: AppColors.primary.withValues(alpha: 0.06),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        if (_isResolvingLocation)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 12),
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        else
+                          Icon(Icons.location_on, color: AppColors.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _locationStatus ?? 'Resolving location…',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _isResolvingLocation ? null : _resolveLocation,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Photo (optional)',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                if (_photo != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.file(
+                      _photo!,
+                      height: 120,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _isSubmitting
+                            ? null
+                            : () => _pickPhoto(ImageSource.camera),
+                        icon: const Icon(Icons.camera_alt),
+                        label: const Text('Camera'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _isSubmitting
+                            ? null
+                            : () => _pickPhoto(ImageSource.gallery),
+                        icon: const Icon(Icons.photo_library),
+                        label: const Text('Gallery'),
+                      ),
+                    ),
+                    if (_photo != null)
+                      IconButton(
+                        onPressed: () => setState(() => _photo = null),
+                        icon: const Icon(Icons.close),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton(
+                  onPressed: _isSubmitting ? null : _submitComplaint,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          height: 22,
+                          width: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Submit Complaint'),
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
+  }
+
+  String _categoryLabel(ComplaintCategory c) {
+    return switch (c) {
+      ComplaintCategory.infrastructure => 'Infrastructure',
+      ComplaintCategory.sanitation => 'Sanitation',
+      ComplaintCategory.waterSupply => 'Water Supply',
+      ComplaintCategory.electricity => 'Electricity',
+      ComplaintCategory.road => 'Road',
+      ComplaintCategory.wasteManagement => 'Waste Management',
+      ComplaintCategory.other => 'Other',
+    };
   }
 }

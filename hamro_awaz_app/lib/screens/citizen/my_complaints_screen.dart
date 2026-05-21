@@ -29,19 +29,29 @@ class _MyComplaintsScreenState extends State<MyComplaintsScreen> {
   }
 
   Future<void> _loadComplaints() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final auth = context.read<AuthService>();
-    final complaintService = context.read<ComplaintService>();
-    final user = await auth.getStoredUser();
-    final uid = user?.id ?? '';
+    try {
+      final auth = context.read<AuthService>();
+      final complaintService = context.read<ComplaintService>();
+      final user = await auth.getStoredUser();
+      final uid = user?.id ?? '';
 
-    final complaints = await complaintService.getComplaints(uid);
+      final complaints = await complaintService.getComplaints(uid);
 
-    setState(() {
-      _complaints = complaints;
-      _isLoading = false;
-    });
+      if (!mounted) return;
+      setState(() {
+        _complaints = complaints;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _complaints = [];
+        _isLoading = false;
+      });
+    }
   }
 
   List<Complaint> get _filteredComplaints {

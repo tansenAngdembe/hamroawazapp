@@ -3,10 +3,12 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/debug_helper.dart';
 import '../../features/map/data/nearby_complaints_api_service.dart';
 import '../../features/map/domain/nearby_complaint_filter_status.dart';
 import '../../features/map/presentation/map_view_controller.dart';
 import '../../features/map/presentation/widgets/map_nearby_complaint_card.dart';
+import '../../features/map/presentation/widgets/safe_map_widget.dart';
 import '../../services/auth_service.dart';
 
 /// Map + nearby complaints with filters. Uses feature-layer controller + API service.
@@ -21,7 +23,11 @@ class MapViewScreen extends StatelessWidget {
           authService: context.read<AuthService>(),
         );
         final c = MapViewController(apiService: api);
-        c.initialize();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          c.initialize().catchError((Object e, StackTrace st) {
+            DebugHelper.logError('MapViewController.initialize failed', e, st);
+          });
+        });
         return c;
       },
       child: const _MapViewBody(),
@@ -80,18 +86,10 @@ class _MapViewBody extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: GoogleMap(
+                    child: SafeMapWidget(
                       onMapCreated: ctrl.onMapCreated,
-                      initialCameraPosition: CameraPosition(
-                        target: LatLng(ctrl.userLat, ctrl.userLng),
-                        zoom: 13,
-                      ),
+                      initialTarget: LatLng(ctrl.userLat, ctrl.userLng),
                       markers: ctrl.markers,
-                      myLocationEnabled: true,
-                      myLocationButtonEnabled: true,
-                      mapToolbarEnabled: false,
-                      compassEnabled: true,
-                      zoomControlsEnabled: false,
                     ),
                   ),
                 ),

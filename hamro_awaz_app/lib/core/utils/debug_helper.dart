@@ -1,54 +1,61 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 class DebugHelper {
-  static bool get isDebugMode => 
-      const bool.fromEnvironment('dart.vm.product') == false;
+  /// Always log API traffic in debug/profile; never in release.
+  static bool get isDebugMode => !kReleaseMode;
 
   static void log(String message, [Object? data]) {
-    if (isDebugMode) {
-      print('[DEBUG] $message');
-      if (data != null) {
-        if (data is Map || data is List) {
-          print('[DEBUG] Data: ${jsonEncode(data)}');
-        } else {
-          print('[DEBUG] Data: $data');
-        }
+    if (!isDebugMode) return;
+    debugPrint('[DEBUG] $message');
+    if (data != null) {
+      if (data is Map || data is List) {
+        debugPrint('[DEBUG] Data: ${jsonEncode(data)}');
+      } else {
+        debugPrint('[DEBUG] Data: $data');
       }
     }
   }
 
   static void logError(String message, [Object? error, StackTrace? stackTrace]) {
-    if (isDebugMode) {
-      print('[ERROR] $message');
-      if (error != null) {
-        print('[ERROR] Error: $error');
-      }
-      if (stackTrace != null) {
-        print('[ERROR] Stack trace: $stackTrace');
+    if (!isDebugMode) return;
+    debugPrint('[ERROR] $message');
+    if (error != null) {
+      debugPrint('[ERROR] Error: $error');
+    }
+    if (stackTrace != null) {
+      debugPrint('[ERROR] Stack trace: $stackTrace');
+    }
+  }
+
+  static void logApiCall(
+    String method,
+    String url,
+    Map<String, String>? headers,
+    Object? body,
+  ) {
+    if (!isDebugMode) return;
+    debugPrint('[API] >>> $method $url');
+    if (headers != null) {
+      debugPrint('[API] Headers: ${jsonEncode(headers)}');
+    }
+    if (body != null) {
+      if (body is String) {
+        debugPrint('[API] Body: $body');
+      } else {
+        debugPrint('[API] Body: ${jsonEncode(body)}');
       }
     }
   }
 
-  static void logApiCall(String method, String url, Map<String, String>? headers, Object? body) {
-    if (isDebugMode) {
-      print('[API] $method $url');
-      if (headers != null) {
-        print('[API] Headers: ${jsonEncode(headers)}');
-      }
-      if (body != null) {
-        if (body is String) {
-          print('[API] Body: $body');
-        } else {
-          print('[API] Body: ${jsonEncode(body)}');
-        }
-      }
+  static void logApiResponse(int statusCode, String body, [String? url]) {
+    if (!isDebugMode) return;
+    if (url != null) {
+      debugPrint('[API] <<< $statusCode $url');
+    } else {
+      debugPrint('[API] <<< Response Status: $statusCode');
     }
-  }
-
-  static void logApiResponse(int statusCode, String body) {
-    if (isDebugMode) {
-      print('[API] Response Status: $statusCode');
-      print('[API] Response Body: $body');
-    }
+    debugPrint('[API] Response Body: $body');
   }
 }

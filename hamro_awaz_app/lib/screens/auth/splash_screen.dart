@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/debug_helper.dart';
 import '../../services/auth_service.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -22,26 +23,47 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _bootstrapAuth() async {
-    final authService = context.read<AuthService>();
-    final accessToken = await authService.getAccessToken();
+    try {
+      final authService = context.read<AuthService>();
+      String? accessToken;
 
-    if (!mounted) return;
+      try {
+        accessToken = await authService.getAccessToken();
+      } catch (e, st) {
+        DebugHelper.logError('Splash: token read failed', e, st);
+        accessToken = null;
+      }
 
-    if (accessToken == null || accessToken.isEmpty) {
-      context.go('/login');
-      return;
-    }
+      if (!mounted) return;
 
-    final authResult = await authService.checkAuth();
-    if (!mounted) return;
+      if (accessToken == null || accessToken.isEmpty) {
+        context.go('/login');
+        return;
+      }
 
-    final isAuthenticated =
-        authResult['success'] == true && authResult['authenticated'] == true;
+      Map<String, dynamic> authResult;
+      try {
+        authResult = await authService.checkAuth();
+      } catch (e, st) {
+        DebugHelper.logError('Splash: checkAuth failed (non-fatal)', e, st);
+        authResult = {'success': false, 'authenticated': false};
+      }
 
-    if (isAuthenticated) {
-      context.go('/dashboard');
-    } else {
-      context.go('/login');
+      if (!mounted) return;
+
+      final isAuthenticated = authResult['success'] == true &&
+          authResult['authenticated'] == true;
+
+      if (isAuthenticated) {
+        context.go('/dashboard');
+      } else {
+        context.go('/login');
+      }
+    } catch (e, st) {
+      DebugHelper.logError('Splash: bootstrap failed', e, st);
+      if (mounted) {
+        context.go('/login');
+      }
     }
   }
 
@@ -57,7 +79,7 @@ class _SplashScreenState extends State<SplashScreen> {
             end: Alignment.bottomRight,
             colors: [
               AppColors.primary,
-              AppColors.primary.withOpacity(0.85),
+              AppColors.primary.withValues(alpha: 0.85),
             ],
           ),
         ),

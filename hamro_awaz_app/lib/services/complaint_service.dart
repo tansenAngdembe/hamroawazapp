@@ -94,6 +94,11 @@ class ComplaintService {
     return null;
   }
 
+  /// Persist a complaint locally after successful API create.
+  Future<void> cacheComplaintLocally(Complaint complaint) async {
+    await _saveToLocalCache(complaint);
+  }
+
   /// Complaints created or updated on this device (persisted locally until a dedicated "my complaints" API exists).
   Future<List<Complaint>> getComplaints(String userId) async {
     return _loadLocalCache();

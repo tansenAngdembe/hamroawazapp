@@ -33,22 +33,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadData() async {
+    if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final auth = context.read<AuthService>();
-    final complaintsService = context.read<ComplaintService>();
-    final user = await auth.getStoredUser();
-    final uid = user?.id ?? '';
-    final complaints = await complaintsService.getComplaints(uid);
+    try {
+      final auth = context.read<AuthService>();
+      final complaintsService = context.read<ComplaintService>();
+      final user = await auth.getStoredUser();
+      final uid = user?.id ?? '';
+      final complaints = await complaintsService.getComplaints(uid);
 
-    setState(() {
-      _recentComplaints = complaints.take(3).toList();
-      _totalComplaints = complaints.length;
-      _resolvedComplaints = complaints.where((c) => c.status == ComplaintStatus.resolved).length;
-      _inProgressComplaints = complaints.where((c) => c.status == ComplaintStatus.inProgress).length;
-      _escalatedComplaints = complaints.where((c) => c.status == ComplaintStatus.escalated).length;
-      _isLoading = false;
-    });
+      if (!mounted) return;
+      setState(() {
+        _recentComplaints = complaints.take(3).toList();
+        _totalComplaints = complaints.length;
+        _resolvedComplaints =
+            complaints.where((c) => c.status == ComplaintStatus.resolved).length;
+        _inProgressComplaints =
+            complaints.where((c) => c.status == ComplaintStatus.inProgress).length;
+        _escalatedComplaints =
+            complaints.where((c) => c.status == ComplaintStatus.escalated).length;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
   }
 
   String _getGreeting() {

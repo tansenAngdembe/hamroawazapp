@@ -1,18 +1,21 @@
 /// User-facing complaint status filters mapped to backend `statusId` strings.
+/// User-facing complaint status filters mapped to backend `statusId` strings.
 enum NearbyComplaintFilterStatus {
-  active,
+  newComplaint,
   pending,
   rejected,
   inProgress,
   escalated,
+  resolved, // added
+  closed,   // added
 }
 
 extension NearbyComplaintFilterStatusX on NearbyComplaintFilterStatus {
   /// Label shown in the dropdown (user-friendly).
   String get displayLabel {
     switch (this) {
-      case NearbyComplaintFilterStatus.active:
-        return 'Active';
+      case NearbyComplaintFilterStatus.newComplaint:
+        return 'New';
       case NearbyComplaintFilterStatus.pending:
         return 'Pending';
       case NearbyComplaintFilterStatus.rejected:
@@ -21,20 +24,28 @@ extension NearbyComplaintFilterStatusX on NearbyComplaintFilterStatus {
         return 'In Progress';
       case NearbyComplaintFilterStatus.escalated:
         return 'Escalated';
+      case NearbyComplaintFilterStatus.resolved: // added
+        return 'Resolved';
+      case NearbyComplaintFilterStatus.closed:   // added
+        return 'Closed';
     }
   }
 
   /// Value sent to the API as `statusId`.
   String get backendStatusId {
     switch (this) {
-      case NearbyComplaintFilterStatus.active:
-        return 'ACTIVE';
+      case NearbyComplaintFilterStatus.newComplaint:
+        return 'NEW';
       case NearbyComplaintFilterStatus.pending:
-        return 'PENDING';
+        return 'IN_REVIEW';
+      case NearbyComplaintFilterStatus.inProgress:
+        return 'IN_PROGRESS';
+      case NearbyComplaintFilterStatus.resolved:
+        return 'RESOLVED';
       case NearbyComplaintFilterStatus.rejected:
         return 'REJECTED';
-      case NearbyComplaintFilterStatus.inProgress:
-        return 'INPROGRESS';
+      case NearbyComplaintFilterStatus.closed:
+        return 'CLOSED';
       case NearbyComplaintFilterStatus.escalated:
         return 'ESCALATED';
     }

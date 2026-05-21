@@ -1,5 +1,3 @@
-import org.gradle.api.tasks.compile.JavaCompile
-
 pluginManagement {
     val flutterSdkPath =
         run {
@@ -26,18 +24,3 @@ plugins {
 }
 
 include(":app")
-
-// Ensure Kotlin compiles before Java in plugins (e.g. shared_preferences_android).
-gradle.beforeProject {
-    if (it == it.rootProject) return@beforeProject
-    it.afterEvaluate { project ->
-        project.tasks.withType<JavaCompile>().configureEach {
-            val kotlinTasks = project.tasks.matching { task ->
-                task.name.startsWith("compile") && task.name.contains("Kotlin", ignoreCase = true)
-            }
-            if (kotlinTasks.isNotEmpty()) {
-                dependsOn(kotlinTasks)
-            }
-        }
-    }
-}

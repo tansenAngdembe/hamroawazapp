@@ -1,78 +1,58 @@
+import 'dart:async';
 import 'dart:io';
-import 'package:http/http.dart' as http;
+
+import 'package:dio/dio.dart';
+
+import '../constants/api_constants.dart';
 import 'debug_helper.dart';
 
 class NetworkHelper {
-  static Future<bool> hasInternetConnection() async {
+  /// Quick TCP check — fails in ~8s if host/port is unreachable.
+  static Future<bool> canReachServer({
+    String? baseUrl,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
     try {
-      final result = await InternetAddress.lookup('google.com');
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } on SocketException catch (_) {
+      final uri = Uri.parse(baseUrl ?? ApiConstants.baseUrl);
+      final host = uri.host;
+      final port = uri.port == 0 ? 9080 : uri.port;
+
+      DebugHelper.log('TCP reachability check', {'host': host, 'port': port});
+
+      final socket = await Socket.connect(host, port, timeout: timeout);
+      await socket.close();
+      DebugHelper.log('TCP reachability: OK');
+      return true;
+    } on SocketException catch (e) {
+      DebugHelper.logError('TCP reachability failed', e);
+      return false;
+    } on TimeoutException catch (e) {
+      DebugHelper.logError('TCP reachability timeout', e);
+      return false;
+    } catch (e) {
+      DebugHelper.logError('TCP reachability error', e);
       return false;
     }
   }
 
-  static Future<Map<String, dynamic>> checkServerReachability(String baseUrl) async {
+  static Future<bool> hasInternetConnection() async {
     try {
-      DebugHelper.log('Checking server reachability', baseUrl);
-      
-      final uri = Uri.parse(baseUrl);
-      final response = await http.get(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 10));
-
-      DebugHelper.log('Server reachability check result', {
-        'statusCode': response.statusCode,
-        'body': response.body,
-      });
-
-      return {
-        'reachable': true,
-        'statusCode': response.statusCode,
-        'body': response.body,
-      };
-    } on SocketException catch (e) {
-      DebugHelper.logError('Socket exception during server check', e);
-      return {
-        'reachable': false,
-        'error': 'Cannot reach server: ${e.message}',
-      };
-    } on http.ClientException catch (e) {
-      DebugHelper.logError('HTTP client exception during server check', e);
-      return {
-        'reachable': false,
-        'error': 'HTTP error: ${e.message}',
-      };
-    } catch (e) {
-      DebugHelper.logError('Unexpected error during server check', e);
-      return {
-        'reachable': false,
-        'error': 'Unexpected error: ${e.toString()}',
-      };
+      final result = await InternetAddress.lookup('google.com')
+          .timeout(const Duration(seconds: 5));
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } on SocketException catch (_) {
+      return false;
+    } on TimeoutException catch (_) {
+      return false;
     }
   }
 
-  static Future<Map<String, dynamic>> performNetworkDiagnostics(String baseUrl) async {
-    final diagnostics = <String, dynamic>{};
-
-    // Check internet connectivity
-    diagnostics['hasInternet'] = await hasInternetConnection();
-
-    // Check server reachability
-    final serverCheck = await checkServerReachability(baseUrl);
-    diagnostics['serverReachable'] = serverCheck['reachable'];
-    diagnostics['serverResponse'] = serverCheck;
-
-    // Additional checks
-    diagnostics['baseUrl'] = baseUrl;
-    diagnostics['timestamp'] = DateTime.now().toIso8601String();
-
-    DebugHelper.log('Network diagnostics completed', diagnostics);
-
-    return diagnostics;
+  static String unreachableMessage() {
+    return 'Cannot connect to ${ApiConstants.baseUrl}.\n\n'
+        '• Phone and PC must be on the same Wi‑Fi\n'
+        '• Backend must listen on 0.0.0.0:9080 (not only localhost)\n'
+        '• Windows Firewall: allow port 9080\n'
+        '• Update IP in lib/core/constants/api_constants.dart\n'
+        '• Android emulator: use http://10.0.2.2:9080/api/v1';
   }
 }

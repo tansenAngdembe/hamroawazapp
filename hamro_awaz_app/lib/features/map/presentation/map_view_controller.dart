@@ -17,12 +17,13 @@ class MapViewController extends ChangeNotifier {
   final NearbyComplaintsApiService _api;
 
   GoogleMapController? _mapController;
+  bool _didInitialize = false;
 
   double _userLat = ApiConstants.defaultLatitude;
   double _userLng = ApiConstants.defaultLongitude;
 
   double _radiusKm = NearbyMapRadiusOptions.defaultKm;
-  NearbyComplaintFilterStatus _statusFilter = NearbyComplaintFilterStatus.active;
+  NearbyComplaintFilterStatus _statusFilter = NearbyComplaintFilterStatus.newComplaint;
 
   List<NearbyComplaintDto> _complaints = [];
   bool _isLoading = false;
@@ -71,16 +72,27 @@ class MapViewController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Called once when the screen is created: GPS → first fetch → camera.
+  /// Called once when the map tab is first opened: GPS → first fetch → camera.
   Future<void> initialize() async {
+    if (_didInitialize) return;
+    _didInitialize = true;
+
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
-    await _resolveUserLocation();
-    notifyListeners();
-    await _fetchNearbyInternal(isPullRefresh: false);
-    await _syncCameraToUser();
+    try {
+      await _resolveUserLocation();
+      notifyListeners();
+      await _fetchNearbyInternal(isPullRefresh: false);
+      await _syncCameraToUser();
+    } catch (e) {
+      _didInitialize = false;
+      _errorMessage = 'Could not load map data. Pull to retry.';
+      _isLoading = false;
+      _isRefreshing = false;
+      notifyListeners();
+    }
   }
 
   /// Pull-to-refresh / manual reload.
