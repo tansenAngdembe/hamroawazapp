@@ -5,6 +5,55 @@ enum ComplaintStatus {
   escalated,
 }
 
+/// Municipality complaint category from `GET /municipality/category/list`.
+class Category {
+  const Category({
+    required this.categoryName,
+    required this.uniqueId,
+  });
+
+  final String categoryName;
+  final String uniqueId;
+
+  factory Category.fromJson(Map<String, dynamic> json) {
+    return Category(
+      categoryName: json['categoryName']?.toString() ?? '',
+      uniqueId: json['uniqueId']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'categoryName': categoryName,
+        'uniqueId': uniqueId,
+      };
+
+  /// Parses `data` array from the standard API envelope.
+  static List<Category> listFromEnvelopeData(dynamic data) {
+    if (data is! List) return [];
+    final out = <Category>[];
+    for (final item in data) {
+      if (item is Map) {
+        final category = Category.fromJson(Map<String, dynamic>.from(item));
+        if (category.uniqueId.isNotEmpty && category.categoryName.isNotEmpty) {
+          out.add(category);
+        }
+      }
+    }
+    return out;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Category &&
+          runtimeType == other.runtimeType &&
+          categoryName == other.categoryName &&
+          uniqueId == other.uniqueId;
+
+  @override
+  int get hashCode => Object.hash(categoryName, uniqueId);
+}
+
 enum ComplaintCategory {
   infrastructure,
   sanitation,
@@ -87,7 +136,8 @@ class Complaint {
   final bool isOwnSubmission;
   /// Raw category id from API when known (for updates).
   final String? categoryIdStr;
-  final String? municipalityUniqueId;
+  /// Display label from API (`categoryName`), when available.
+  final String? categoryLabel;
 
   Complaint({
     required this.id,
@@ -109,7 +159,7 @@ class Complaint {
     this.userVote,
     this.isOwnSubmission = false,
     this.categoryIdStr,
-    this.municipalityUniqueId,
+    this.categoryLabel,
   });
 
   Complaint copyWith({
@@ -132,7 +182,7 @@ class Complaint {
     String? userVote,
     bool? isOwnSubmission,
     String? categoryIdStr,
-    String? municipalityUniqueId,
+    String? categoryLabel,
   }) {
     return Complaint(
       id: id ?? this.id,
@@ -154,7 +204,7 @@ class Complaint {
       userVote: userVote ?? this.userVote,
       isOwnSubmission: isOwnSubmission ?? this.isOwnSubmission,
       categoryIdStr: categoryIdStr ?? this.categoryIdStr,
-      municipalityUniqueId: municipalityUniqueId ?? this.municipalityUniqueId,
+      categoryLabel: categoryLabel ?? this.categoryLabel,
     );
   }
 
@@ -173,6 +223,7 @@ class Complaint {
         json['description']?.toString() ??
         '';
     final catId = json['categoryId']?.toString();
+    final catLabel = json['categoryName']?.toString();
     final category = complaintCategoryFromApiId(catId);
     final dept = json['municipality']?.toString() ??
         json['department']?.toString() ??
@@ -190,7 +241,6 @@ class Complaint {
     }
     final userId =
         json['userId']?.toString() ?? json['submittedByUserId']?.toString() ?? '';
-    final munId = json['municipalityUniqueId']?.toString();
 
     var isOwn = json['isOwnSubmission'] == true ||
         json['ownComplaint'] == true ||
@@ -234,7 +284,7 @@ class Complaint {
       updatedAt: updated,
       isOwnSubmission: isOwn,
       categoryIdStr: catId,
-      municipalityUniqueId: munId,
+      categoryLabel: catLabel,
     );
   }
 
@@ -259,7 +309,7 @@ class Complaint {
       'userVote': userVote,
       'isOwnSubmission': isOwnSubmission,
       'categoryIdStr': categoryIdStr,
-      'municipalityUniqueId': municipalityUniqueId,
+      'categoryLabel': categoryLabel,
     };
   }
 
@@ -290,11 +340,14 @@ class Complaint {
       userVote: json['userVote']?.toString(),
       isOwnSubmission: json['isOwnSubmission'] == true,
       categoryIdStr: json['categoryIdStr']?.toString(),
-      municipalityUniqueId: json['municipalityUniqueId']?.toString(),
+      categoryLabel: json['categoryLabel']?.toString(),
     );
   }
 
   String get categoryName {
+    if (categoryLabel != null && categoryLabel!.isNotEmpty) {
+      return categoryLabel!;
+    }
     switch (category) {
       case ComplaintCategory.infrastructure:
         return 'Infrastructure';

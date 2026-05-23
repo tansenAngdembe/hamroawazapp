@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
 
 import '../constants/api_constants.dart';
@@ -38,11 +36,11 @@ class DioClient {
         },
         onResponse: (response, handler) {
           final body = response.data;
-          final text = body is String
-              ? body
-              : body == null
-                  ? ''
-                  : jsonEncode(body);
+          final text = body == null
+              ? ''
+              : body is String
+                  ? body
+                  : DebugHelper.describeBody(body);
           DebugHelper.logApiResponse(
             response.statusCode ?? 0,
             text,

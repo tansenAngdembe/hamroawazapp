@@ -21,7 +21,6 @@ class _EditComplaintScreenState extends State<EditComplaintScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController;
   late final TextEditingController _descriptionController;
-  late final TextEditingController _municipalityController;
   late final TextEditingController _photoUrlController;
   File? _newPhoto;
   bool _isLoading = false;
@@ -32,7 +31,6 @@ class _EditComplaintScreenState extends State<EditComplaintScreen> {
     final c = widget.complaint;
     _titleController = TextEditingController(text: c.title);
     _descriptionController = TextEditingController(text: c.description);
-    _municipalityController = TextEditingController(text: c.department);
     _photoUrlController = TextEditingController(
       text: c.imageUrls.isNotEmpty ? c.imageUrls.first : '',
     );
@@ -42,7 +40,6 @@ class _EditComplaintScreenState extends State<EditComplaintScreen> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
-    _municipalityController.dispose();
     _photoUrlController.dispose();
     super.dispose();
   }
@@ -76,9 +73,6 @@ class _EditComplaintScreenState extends State<EditComplaintScreen> {
         complaintUniqueId: widget.complaint.id,
         complaintTitle: _titleController.text.trim(),
         complaintDescription: desc.isEmpty ? null : desc,
-        municipality: _municipalityController.text.trim().isEmpty
-            ? null
-            : _municipalityController.text.trim(),
         photoUrl: _photoUrlController.text.trim().isEmpty
             ? null
             : _photoUrlController.text.trim(),
@@ -146,14 +140,6 @@ class _EditComplaintScreenState extends State<EditComplaintScreen> {
                   if (v.length < 20) return 'At least 20 characters';
                   return null;
                 },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _municipalityController,
-                decoration: const InputDecoration(
-                  labelText: 'Municipality',
-                  prefixIcon: Icon(Icons.location_city),
-                ),
               ),
               const SizedBox(height: 16),
               TextFormField(

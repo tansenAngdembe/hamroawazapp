@@ -11,7 +11,6 @@ import '../../models/create_complaint_request.dart';
 import '../../models/user_profile.dart';
 import '../../repositories/complaint_repository.dart';
 import '../../repositories/user_profile_repository.dart';
-import '../../services/auth_service.dart';
 import '../../services/complaint_service.dart';
 import '../../services/location_service.dart';
 import '../../widgets/picked_image_tile.dart';
@@ -43,7 +42,10 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
   UserProfile? _profile;
   bool _documentsSubmitted = false;
 
-  ComplaintCategory? _selectedCategory;
+  List<Category> _categories = [];
+  bool _categoriesLoading = true;
+  String? _categoriesError;
+  Category? _selectedCategory;
   File? _photo;
   bool _isSubmitting = false;
   bool _isResolvingLocation = false;
@@ -53,7 +55,10 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadProfile());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadProfile();
+      _loadCategories();
+    });
   }
 
   @override
@@ -61,6 +66,33 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadCategories() async {
+    setState(() {
+      _categoriesLoading = true;
+      _categoriesError = null;
+    });
+
+    try {
+      final complaintService = context.read<ComplaintService>();
+      final categories = await complaintService.getCategories();
+      if (!mounted) return;
+      setState(() {
+        _categories = categories;
+        _categoriesLoading = false;
+        if (_selectedCategory != null &&
+            !_categories.any((c) => c.uniqueId == _selectedCategory!.uniqueId)) {
+          _selectedCategory = null;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _categoriesLoading = false;
+        _categoriesError = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -177,32 +209,22 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
       }
     }
 
-    final auth = context.read<AuthService>();
     final complaintRepo = context.read<ComplaintRepository>();
     final complaintService = context.read<ComplaintService>();
-
-    final user = await auth.getStoredUser();
-    if (!mounted) return;
-    if (user == null) {
-      _showSnack('Please log in again', isError: true);
-      return;
-    }
 
     setState(() => _isSubmitting = true);
 
     try {
-
       final request = CreateComplaintRequest(
         complaintTitle: _titleController.text.trim(),
         complaintDescription: _descriptionController.text.trim(),
-        categoryId: _selectedCategory!.apiCategoryId,
+        categoryId: _selectedCategory!.uniqueId,
         complaintCoordinates: _coordinates!,
       );
 
       final result = await complaintRepo.createComplaint(
         request: request,
         photo: _photo,
-        userId: user.id,
       );
 
       if (!mounted) return;
@@ -360,23 +382,7 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
-                DropdownButtonFormField<ComplaintCategory>(
-                  value: _selectedCategory,
-                  decoration: const InputDecoration(
-                    labelText: 'Category',
-                    prefixIcon: Icon(Icons.category),
-                  ),
-                  items: ComplaintCategory.values.map((c) {
-                    return DropdownMenuItem(
-                      value: c,
-                      child: Text(_categoryLabel(c)),
-                    );
-                  }).toList(),
-                  onChanged: _isSubmitting
-                      ? null
-                      : (v) => setState(() => _selectedCategory = v),
-                  validator: (v) => v == null ? 'Select a category' : null,
-                ),
+                _buildCategoryField(),
                 const SizedBox(height: 16),
                 Card(
                   color: AppColors.primary.withValues(alpha: 0.06),
@@ -456,7 +462,12 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
                 ),
                 const SizedBox(height: 32),
                 ElevatedButton(
-                  onPressed: _isSubmitting ? null : _submitComplaint,
+                  onPressed: _isSubmitting ||
+                          _categoriesLoading ||
+                          _categoriesError != null ||
+                          _categories.isEmpty
+                      ? null
+                      : _submitComplaint,
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
@@ -479,15 +490,68 @@ class _CreateComplaintScreenState extends State<CreateComplaintScreen> {
     );
   }
 
-  String _categoryLabel(ComplaintCategory c) {
-    return switch (c) {
-      ComplaintCategory.infrastructure => 'Infrastructure',
-      ComplaintCategory.sanitation => 'Sanitation',
-      ComplaintCategory.waterSupply => 'Water Supply',
-      ComplaintCategory.electricity => 'Electricity',
-      ComplaintCategory.road => 'Road',
-      ComplaintCategory.wasteManagement => 'Waste Management',
-      ComplaintCategory.other => 'Other',
-    };
+  Widget _buildCategoryField() {
+    if (_categoriesLoading) {
+      return const InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Category',
+          prefixIcon: Icon(Icons.category),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 12),
+            Text('Loading categories…'),
+          ],
+        ),
+      );
+    }
+
+    if (_categoriesError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InputDecorator(
+            decoration: InputDecoration(
+              labelText: 'Category',
+              prefixIcon: const Icon(Icons.category),
+              errorText: _categoriesError,
+            ),
+            child: Text(
+              _categoriesError!,
+              style: TextStyle(color: AppColors.error, fontSize: 13),
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _loadCategories,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry loading categories'),
+          ),
+        ],
+      );
+    }
+
+    return DropdownButtonFormField<Category>(
+      value: _selectedCategory,
+      decoration: const InputDecoration(
+        labelText: 'Category',
+        prefixIcon: Icon(Icons.category),
+      ),
+      items: _categories.map((c) {
+        return DropdownMenuItem(
+          value: c,
+          child: Text(c.categoryName),
+        );
+      }).toList(),
+      onChanged: _isSubmitting
+          ? null
+          : (v) => setState(() => _selectedCategory = v),
+      validator: (v) => v == null ? 'Select a category' : null,
+    );
   }
 }

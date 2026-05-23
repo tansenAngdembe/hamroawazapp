@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/api_constants.dart';
@@ -75,7 +76,7 @@ class ComplaintService {
     for (final item in rawList) {
       if (item is Map) {
         out.add(Complaint.fromApiMap(
-          Map<String, dynamic>.from(item as Map),
+          Map<String, dynamic>.from(item),
           currentUserId: currentUserId,
         ));
       }
@@ -102,6 +103,53 @@ class ComplaintService {
   /// Complaints created or updated on this device (persisted locally until a dedicated "my complaints" API exists).
   Future<List<Complaint>> getComplaints(String userId) async {
     return _loadLocalCache();
+  }
+
+  /// `GET /municipality/category/list` — returns parsed categories from envelope `data`.
+  Future<List<Category>> getCategories() async {
+    final token = await _auth.getAccessToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Please log in to load categories');
+    }
+
+    final url = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.categoryList}');
+    final headers = await _jsonHeaders(withAuth: true);
+
+    DebugHelper.logApiCall('GET', url.toString(), headers, null);
+
+    try {
+      final response = await http
+          .get(url, headers: headers)
+          .timeout(const Duration(seconds: 30));
+
+      DebugHelper.logApiResponse(response.statusCode, response.body, url.toString());
+
+      final map = ApiEnvelope.tryDecodeMap(response.body);
+      if (map == null) {
+        throw Exception('Invalid category list response');
+      }
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception(
+          map['message']?.toString() ?? 'Failed to load categories (${response.statusCode})',
+        );
+      }
+
+      if (!ApiEnvelope.indicatesSuccess(map)) {
+        throw Exception(ApiEnvelope.message(map));
+      }
+
+      final categories = Category.listFromEnvelopeData(ApiEnvelope.data(map));
+      if (categories.isEmpty) {
+        throw Exception('No categories available');
+      }
+
+      return categories;
+    } on TimeoutException {
+      throw Exception('Category list request timed out');
+    } on http.ClientException catch (e) {
+      throw Exception('Could not load categories: ${e.message}');
+    }
   }
 
   /// Nearby complaints; [withAuth] sends bearer token when available for personalized/highlighted results.
@@ -169,110 +217,136 @@ class ComplaintService {
   Future<Map<String, dynamic>> createComplaint({
     required String title,
     required String description,
-    required ComplaintCategory category,
-    required String municipalityUniqueId,
-    required String userId,
+    required String categoryId,
+    required double latitude,
+    required double longitude,
     List<File> imageFiles = const [],
-    double? latitude,
-    double? longitude,
-    String? departmentLabel,
+    String? categoryLabel,
   }) async {
     final token = await _auth.getAccessToken();
-    if (token == null) {
+    if (token == null || token.isEmpty) {
       return {'success': false, 'message': 'Please log in to submit a complaint'};
     }
 
     final url = Uri.parse('${ApiConstants.baseUrl}${ApiConstants.complaintCreate}');
-    final data = <String, dynamic>{
+
+    final dataObject = <String, dynamic>{
       'complaintTitle': title,
       'complaintDescription': description,
-      'municipalityUniqueId': municipalityUniqueId,
-      'categoryId': category.apiCategoryId,
-    };
-    if (latitude != null && longitude != null) {
-      data['complaintCoordinates'] = {
+      'categoryId': categoryId,
+      'complaintCoordinates': {
         'latitude': latitude,
         'longitude': longitude,
-      };
+      },
+    };
+    final dataJson = jsonEncode(dataObject);
+
+    final request = http.MultipartRequest('POST', url);
+    request.headers['Authorization'] = 'Bearer $token';
+    request.headers['Accept'] = 'application/json';
+
+    // @RequestPart("data") — JSON part with explicit application/json.
+    request.files.add(
+      http.MultipartFile.fromString(
+        'data',
+        dataJson,
+        filename: 'data.json',
+        contentType: MediaType('application', 'json'),
+      ),
+    );
+
+    for (final file in imageFiles) {
+      if (!await file.exists()) continue;
+      final ext = file.path.split('.').last.toLowerCase();
+      final isPng = ext == 'png';
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'photos',
+          file.path,
+          filename: isPng ? 'complaint_photo.png' : 'complaint_photo.jpg',
+          contentType: MediaType('image', isPng ? 'png' : 'jpeg'),
+        ),
+      );
     }
 
-    final payload = <String, dynamic>{'data': data};
-    if (imageFiles.isNotEmpty) {
-      final bytes = await imageFiles.first.readAsBytes();
-      payload['photos'] = base64Encode(bytes);
-    }
-
-    final headers = await _jsonHeaders(withAuth: true);
-
-    final body = jsonEncode(payload);
-    DebugHelper.logApiCall('POST', url.toString(), headers, {
-      'data': data,
-      'photos': imageFiles.isNotEmpty ? '[base64, ${imageFiles.first.length} bytes]' : null,
+    DebugHelper.logApiCall('POST', url.toString(), request.headers, {
+      'data': dataObject,
+      'photos': imageFiles.isEmpty
+          ? null
+          : imageFiles.map((f) => f.path).toList(),
     });
 
-    final response = await http
-        .post(url, headers: headers, body: body)
-        .timeout(const Duration(seconds: 45));
+    try {
+      final streamed = await request.send().timeout(const Duration(seconds: 90));
+      final response = await http.Response.fromStream(streamed);
 
-    DebugHelper.logApiResponse(response.statusCode, response.body);
+      DebugHelper.logApiResponse(response.statusCode, response.body, url.toString());
 
-    final map = ApiEnvelope.tryDecodeMap(response.body);
-    if (map == null) {
-      return {'success': false, 'message': 'Invalid server response'};
-    }
+      final map = ApiEnvelope.tryDecodeMap(response.body);
+      if (map == null) {
+        return {'success': false, 'message': 'Invalid server response'};
+      }
 
-    if (response.statusCode != 200 && response.statusCode != 201) {
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        return {
+          'success': false,
+          'message': map['message']?.toString() ?? 'Create failed',
+        };
+      }
+
+      if (!ApiEnvelope.indicatesSuccess(map)) {
+        return {'success': false, 'message': ApiEnvelope.message(map)};
+      }
+
+      final storedUser = await _auth.getStoredUser();
+      final currentUserId = storedUser?.id ?? '';
+      final parsed =
+          _complaintFromCreateOrUpdateData(ApiEnvelope.data(map), currentUserId);
+
+      final complaint = parsed ??
+          Complaint(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            title: title,
+            description: description,
+            category: complaintCategoryFromApiId(categoryId),
+            department: '',
+            status: ComplaintStatus.pending,
+            userId: currentUserId.isEmpty ? '0' : currentUserId,
+            latitude: latitude,
+            longitude: longitude,
+            createdAt: DateTime.now(),
+            isOwnSubmission: true,
+            categoryIdStr: categoryId,
+            categoryLabel: categoryLabel,
+          );
+
+      final toStore = complaint.copyWith(
+        userId: currentUserId.isEmpty ? complaint.userId : currentUserId,
+        isOwnSubmission: true,
+        categoryLabel: categoryLabel ?? complaint.categoryLabel,
+      );
+      await _saveToLocalCache(toStore);
+
+      return {
+        'success': true,
+        'message': ApiEnvelope.message(map),
+        'complaint': toStore,
+        'raw': map,
+      };
+    } on TimeoutException {
+      return {'success': false, 'message': 'Complaint submission timed out'};
+    } on http.ClientException catch (e) {
       return {
         'success': false,
-        'message': map['message']?.toString() ?? 'Create failed',
+        'message': 'Could not submit complaint: ${e.message}',
       };
     }
-
-    if (!ApiEnvelope.indicatesSuccess(map)) {
-      return {'success': false, 'message': ApiEnvelope.message(map)};
-    }
-
-    final storedUser = await _auth.getStoredUser();
-    final uid = storedUser?.id ?? userId;
-    final parsed = _complaintFromCreateOrUpdateData(ApiEnvelope.data(map), uid);
-
-    final complaint = parsed ??
-        Complaint(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          title: title,
-          description: description,
-          category: category,
-          department: departmentLabel ?? municipalityUniqueId,
-          status: ComplaintStatus.pending,
-          userId: uid,
-          latitude: latitude,
-          longitude: longitude,
-          createdAt: DateTime.now(),
-          isOwnSubmission: true,
-          categoryIdStr: category.apiCategoryId,
-          municipalityUniqueId: municipalityUniqueId,
-        );
-
-    final toStore = complaint.copyWith(
-      userId: uid,
-      isOwnSubmission: true,
-      department: departmentLabel ?? complaint.department,
-    );
-    await _saveToLocalCache(toStore);
-
-    return {
-      'success': true,
-      'message': ApiEnvelope.message(map),
-      'complaint': toStore,
-      'raw': map,
-    };
   }
 
   Future<Map<String, dynamic>> updateComplaint({
     required String complaintUniqueId,
     String? complaintTitle,
     String? complaintDescription,
-    String? municipality,
     String? photoUrl,
     String? categoryId,
     File? photoFile,
@@ -293,7 +367,6 @@ class ComplaintService {
       if (complaintDescription != null) {
         request.fields['complaintDescription'] = complaintDescription;
       }
-      if (municipality != null) request.fields['municipality'] = municipality;
       if (photoUrl != null) request.fields['photoUrl'] = photoUrl;
       if (categoryId != null) request.fields['categoryId'] = categoryId;
       request.files.add(
@@ -310,7 +383,6 @@ class ComplaintService {
         complaintUniqueId,
         complaintTitle: complaintTitle,
         complaintDescription: complaintDescription,
-        municipality: municipality,
         photoUrl: photoUrl,
         categoryId: categoryId,
       );
@@ -324,7 +396,6 @@ class ComplaintService {
     if (complaintDescription != null) {
       bodyMap['complaintDescription'] = complaintDescription;
     }
-    if (municipality != null) bodyMap['municipality'] = municipality;
     if (photoUrl != null) bodyMap['photoUrl'] = photoUrl;
     if (categoryId != null) bodyMap['categoryId'] = categoryId;
 
@@ -343,7 +414,6 @@ class ComplaintService {
       complaintUniqueId,
       complaintTitle: complaintTitle,
       complaintDescription: complaintDescription,
-      municipality: municipality,
       photoUrl: photoUrl,
       categoryId: categoryId,
     );
@@ -354,7 +424,6 @@ class ComplaintService {
     String complaintUniqueId, {
     String? complaintTitle,
     String? complaintDescription,
-    String? municipality,
     String? photoUrl,
     String? categoryId,
   }) async {
@@ -389,7 +458,6 @@ class ComplaintService {
         if (complaintDescription != null) {
           c = c.copyWith(description: complaintDescription);
         }
-        if (municipality != null) c = c.copyWith(department: municipality);
         if (photoUrl != null) {
           c = c.copyWith(imageUrls: [...c.imageUrls, photoUrl]);
         }

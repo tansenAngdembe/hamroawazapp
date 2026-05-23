@@ -26,7 +26,6 @@ class ComplaintRepository {
   Future<ApiResponse<Complaint>> createComplaint({
     required CreateComplaintRequest request,
     File? photo,
-    required String userId,
   }) async {
     final token = await _auth.getAccessToken();
     if (token == null || token.isEmpty) {
@@ -38,37 +37,45 @@ class ComplaintRepository {
 
     try {
       final dataJson = jsonEncode(request.toJson());
-      final fields = <String, dynamic>{
-        'data': MultipartFile.fromString(
-          dataJson,
-          filename: 'data.json',
-          contentType: MediaType.parse('application/json'),
-        ),
-      };
 
-      if (photo != null) {
+      // Spring @RequestPart("data") expects a part with Content-Type: application/json.
+      final formData = FormData();
+      formData.files.add(
+        MapEntry(
+          'data',
+          MultipartFile.fromString(
+            dataJson,
+            filename: 'data.json',
+            contentType: MediaType.parse('application/json'),
+          ),
+        ),
+      );
+
+      if (photo != null && await photo.exists()) {
         final ext = photo.path.split('.').last.toLowerCase();
-        final subtype = ext == 'png' ? 'png' : 'jpeg';
-        fields['photos'] = await MultipartFile.fromFile(
-          photo.path,
-          filename: 'complaint_photo.$ext',
-          contentType: MediaType('image', subtype),
+        final isPng = ext == 'png';
+        formData.files.add(
+          MapEntry(
+            'photos',
+            await MultipartFile.fromFile(
+              photo.path,
+              filename: isPng ? 'complaint_photo.png' : 'complaint_photo.jpg',
+              contentType: MediaType('image', isPng ? 'png' : 'jpeg'),
+            ),
+          ),
         );
       }
-
-      final formData = FormData.fromMap(fields);
 
       final response = await _dio.dio.post(
         ApiConstants.complaintCreate,
         data: formData,
         options: Options(
-          contentType: 'multipart/form-data',
           receiveTimeout: const Duration(seconds: 90),
           sendTimeout: const Duration(seconds: 90),
         ),
       );
 
-      return _parseComplaintResponse(response, request, userId, photo);
+      return await _parseComplaintResponse(response, request, photo);
     } on DioException catch (e, st) {
       DebugHelper.logError('createComplaint Dio error', e, st);
       return ApiResponse<Complaint>(
@@ -84,12 +91,11 @@ class ComplaintRepository {
     }
   }
 
-  ApiResponse<Complaint> _parseComplaintResponse(
+  Future<ApiResponse<Complaint>> _parseComplaintResponse(
     Response<dynamic> response,
     CreateComplaintRequest request,
-    String userId,
     File? photo,
-  ) {
+  ) async {
     final status = response.statusCode ?? 0;
     final body = response.data;
 
@@ -124,11 +130,14 @@ class ComplaintRepository {
     }
 
     final data = ApiEnvelope.data(map);
+    final storedUser = await _auth.getStoredUser();
+    final currentUserId = storedUser?.id ?? '';
+
     Complaint? complaint;
     if (data is Map) {
       complaint = Complaint.fromApiMap(
         Map<String, dynamic>.from(data),
-        currentUserId: userId,
+        currentUserId: currentUserId,
       );
     }
 
@@ -139,7 +148,7 @@ class ComplaintRepository {
       category: complaintCategoryFromApiId(request.categoryId),
       department: '',
       status: ComplaintStatus.pending,
-      userId: userId,
+      userId: currentUserId.isEmpty ? '0' : currentUserId,
       latitude: request.complaintCoordinates.latitude,
       longitude: request.complaintCoordinates.longitude,
       createdAt: DateTime.now(),

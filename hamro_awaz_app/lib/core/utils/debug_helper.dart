@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class DebugHelper {
@@ -10,11 +11,7 @@ class DebugHelper {
     if (!isDebugMode) return;
     debugPrint('[DEBUG] $message');
     if (data != null) {
-      if (data is Map || data is List) {
-        debugPrint('[DEBUG] Data: ${jsonEncode(data)}');
-      } else {
-        debugPrint('[DEBUG] Data: $data');
-      }
+      debugPrint('[DEBUG] Data: ${describeBody(data)}');
     }
   }
 
@@ -29,6 +26,38 @@ class DebugHelper {
     }
   }
 
+  /// Safe string for logs — never throws on FormData, MultipartFile, etc.
+  static String describeBody(Object? body) {
+    if (body == null) return '';
+    if (body is String) return _truncate(body);
+    if (body is FormData) {
+      final parts = <String>[];
+      for (final field in body.fields) {
+        parts.add('${field.key}=${_truncate(field.value)}');
+      }
+      for (final file in body.files) {
+        final name = file.value.filename ?? 'file';
+        parts.add('${file.key}=[multipart:$name]');
+      }
+      return 'FormData{${parts.join(', ')}}';
+    }
+    if (body is MultipartFile) {
+      return 'MultipartFile(${body.filename ?? 'unnamed'})';
+    }
+    if (body is Map || body is List) {
+      try {
+        return _truncate(jsonEncode(body));
+      } catch (_) {
+        return body.toString();
+      }
+    }
+    try {
+      return _truncate(jsonEncode(body));
+    } catch (_) {
+      return body.toString();
+    }
+  }
+
   static void logApiCall(
     String method,
     String url,
@@ -38,14 +67,14 @@ class DebugHelper {
     if (!isDebugMode) return;
     debugPrint('[API] >>> $method $url');
     if (headers != null) {
-      debugPrint('[API] Headers: ${jsonEncode(headers)}');
+      try {
+        debugPrint('[API] Headers: ${jsonEncode(headers)}');
+      } catch (_) {
+        debugPrint('[API] Headers: $headers');
+      }
     }
     if (body != null) {
-      if (body is String) {
-        debugPrint('[API] Body: $body');
-      } else {
-        debugPrint('[API] Body: ${jsonEncode(body)}');
-      }
+      debugPrint('[API] Body: ${describeBody(body)}');
     }
   }
 
@@ -56,6 +85,11 @@ class DebugHelper {
     } else {
       debugPrint('[API] <<< Response Status: $statusCode');
     }
-    debugPrint('[API] Response Body: $body');
+    debugPrint('[API] Response Body: ${_truncate(body)}');
+  }
+
+  static String _truncate(String value, [int max = 2000]) {
+    if (value.length <= max) return value;
+    return '${value.substring(0, max)}…';
   }
 }

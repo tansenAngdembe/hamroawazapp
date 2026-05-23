@@ -26,6 +26,9 @@ class ApiConstants {
   // Document verification
   static const String documentUpload = '/user/document/UPLOAD';
 
+  // Municipality / categories
+  static const String categoryList = '/municipality/category/list';
+
   // Complaints
   static const String complaintCreate = '/user/complaint/create';
   static const String complaintUpdate = '/user/complaint/update';
