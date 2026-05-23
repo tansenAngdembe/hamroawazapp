@@ -3,12 +3,15 @@ import 'package:intl/intl.dart';
 import '../constants/app_colors.dart';
 import 'status_chip.dart';
 import '../../models/complaint.dart';
+import '../../widgets/complaint_comments/complaint_comments_section.dart';
 
 class ComplaintCard extends StatelessWidget {
   final Complaint complaint;
   final VoidCallback? onTap;
   final VoidCallback? onVoteYes;
   final VoidCallback? onVoteNo;
+  final bool enableComments;
+  final VoidCallback? onEdit;
 
   const ComplaintCard({
     super.key,
@@ -16,16 +19,18 @@ class ComplaintCard extends StatelessWidget {
     this.onTap,
     this.onVoteYes,
     this.onVoteNo,
+    this.enableComments = true,
+    this.onEdit,
   });
 
   @override
   Widget build(BuildContext context) {
     final dateFormat = DateFormat('MMM dd, yyyy');
-    
-    return Card(
+
+    final card = Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: InkWell(
-        onTap: onTap,
+        onTap: enableComments ? null : onTap,
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -49,7 +54,7 @@ class ComplaintCard extends StatelessWidget {
                     Chip(
                       label: const Text('Yours', style: TextStyle(fontSize: 11)),
                       visualDensity: VisualDensity.compact,
-                      backgroundColor: AppColors.secondary.withOpacity(0.2),
+                      backgroundColor: AppColors.secondary.withValues(alpha: 0.2),
                     ),
                   ],
                   const SizedBox(width: 8),
@@ -112,6 +117,17 @@ class ComplaintCard extends StatelessWidget {
         ),
       ),
     );
+
+    if (enableComments && complaint.id.isNotEmpty) {
+      return ComplaintCommentsHost(
+        complaintUniqueId: complaint.id,
+        onComplaintTap: onTap,
+        onEdit: onEdit,
+        child: card,
+      );
+    }
+
+    return card;
   }
 
   Widget _buildVoteButtons(BuildContext context) {
@@ -119,9 +135,10 @@ class ComplaintCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: (complaint.userVote == 'yes' 
-              ? AppColors.success 
-              : AppColors.error).withOpacity(0.1),
+          color: (complaint.userVote == 'yes'
+                  ? AppColors.success
+                  : AppColors.error)
+              .withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
@@ -130,8 +147,8 @@ class ComplaintCard extends StatelessWidget {
             Icon(
               complaint.userVote == 'yes' ? Icons.thumb_up : Icons.thumb_down,
               size: 14,
-              color: complaint.userVote == 'yes' 
-                  ? AppColors.success 
+              color: complaint.userVote == 'yes'
+                  ? AppColors.success
                   : AppColors.error,
             ),
             const SizedBox(width: 4),
@@ -140,8 +157,8 @@ class ComplaintCard extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
-                color: complaint.userVote == 'yes' 
-                    ? AppColors.success 
+                color: complaint.userVote == 'yes'
+                    ? AppColors.success
                     : AppColors.error,
               ),
             ),
@@ -159,7 +176,7 @@ class ComplaintCard extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: AppColors.success.withOpacity(0.1),
+              color: AppColors.success.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -186,7 +203,7 @@ class ComplaintCard extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: AppColors.error.withOpacity(0.1),
+              color: AppColors.error.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -210,4 +227,3 @@ class ComplaintCard extends StatelessWidget {
     );
   }
 }
-

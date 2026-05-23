@@ -5,6 +5,7 @@ import 'core/api/dio_client.dart';
 import 'core/bootstrap/app_bootstrap.dart';
 import 'core/navigation/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'repositories/comment_repository.dart';
 import 'repositories/complaint_repository.dart';
 import 'repositories/document_repository.dart';
 import 'repositories/user_profile_repository.dart';
@@ -43,6 +44,12 @@ class MyApp extends StatelessWidget {
         ),
         ProxyProvider2<AuthService, DioClient, ComplaintRepository>(
           update: (_, auth, dio, __) => ComplaintRepository(
+            dioClient: dio,
+            authService: auth,
+          ),
+        ),
+        ProxyProvider2<AuthService, DioClient, CommentRepository>(
+          update: (_, auth, dio, __) => CommentRepository(
             dioClient: dio,
             authService: auth,
           ),

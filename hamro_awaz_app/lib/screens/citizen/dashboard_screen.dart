@@ -5,7 +5,6 @@ import '../../core/constants/app_colors.dart';
 import '../../core/widgets/stat_card.dart';
 import '../../core/widgets/complaint_card.dart';
 import '../../models/complaint.dart';
-import '../../services/auth_service.dart';
 import '../../services/complaint_service.dart';
 import 'create_complaint_screen.dart';
 import 'my_complaints_screen.dart';
@@ -37,11 +36,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final auth = context.read<AuthService>();
       final complaintsService = context.read<ComplaintService>();
-      final user = await auth.getStoredUser();
-      final uid = user?.id ?? '';
-      final complaints = await complaintsService.getComplaints(uid);
+      final complaints = await complaintsService.getComplaints();
 
       if (!mounted) return;
       setState(() {
@@ -198,9 +194,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ..._recentComplaints.map(
                         (complaint) => ComplaintCard(
                           complaint: complaint,
-                          onTap: () {
-                            // Navigate to complaint details
-                          },
+                          enableComments: true,
                         ),
                       ),
                   ],

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/constants/app_colors.dart';
+import '../../../../widgets/complaint_comments/complaint_comments_section.dart';
 import '../../data/models/nearby_complaint_models.dart';
 
 /// Compact card for one nearby complaint (map + list surfaces).
@@ -45,15 +46,15 @@ class MapNearbyComplaintCard extends StatelessWidget {
     final statusColor = _statusColor(complaint.status.name);
     final created = complaint.createdAt;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+    final card = Padding(
+      padding: const EdgeInsets.only(bottom: 0),
       child: Material(
         color: theme.colorScheme.surface,
         elevation: isSelected ? 4 : 1,
         shadowColor: Colors.black26,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          onTap: onTap,
+          onTap: null,
           borderRadius: BorderRadius.circular(16),
           child: Container(
             decoration: BoxDecoration(
@@ -160,6 +161,15 @@ class MapNearbyComplaintCard extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: ComplaintCommentsHost(
+        complaintUniqueId: complaint.uniqueId,
+        onComplaintTap: onTap,
+        child: card,
       ),
     );
   }

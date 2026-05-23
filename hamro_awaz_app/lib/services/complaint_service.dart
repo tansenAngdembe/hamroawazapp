@@ -10,6 +10,7 @@ import '../core/constants/api_constants.dart';
 import '../core/utils/api_envelope.dart';
 import '../core/utils/debug_helper.dart';
 import '../models/complaint.dart';
+import '../models/search_param.dart';
 import 'auth_service.dart';
 
 class ComplaintService {
@@ -100,9 +101,85 @@ class ComplaintService {
     await _saveToLocalCache(complaint);
   }
 
-  /// Complaints created or updated on this device (persisted locally until a dedicated "my complaints" API exists).
-  Future<List<Complaint>> getComplaints(String userId) async {
-    return _loadLocalCache();
+  /// `POST /user/complaint/myComplaints/list` with [SearchParam] body.
+  Future<MyComplaintsPageResult> listMyComplaints({
+    SearchParam? searchParam,
+  }) async {
+    final token = await _auth.getAccessToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Please log in to view your complaints');
+    }
+
+    final param = searchParam ?? SearchParam.defaults();
+    final url = Uri.parse(
+      '${ApiConstants.baseUrl}${ApiConstants.complaintMyComplaintsList}',
+    );
+    final headers = await _jsonHeaders(withAuth: true);
+    final body = jsonEncode(param.toJson());
+
+    DebugHelper.logApiCall('POST', url.toString(), headers, param.toJson());
+
+    try {
+      final response = await http
+          .post(url, headers: headers, body: body)
+          .timeout(const Duration(seconds: 30));
+
+      DebugHelper.logApiResponse(response.statusCode, response.body, url.toString());
+
+      final map = ApiEnvelope.tryDecodeMap(response.body);
+      if (map == null) {
+        throw Exception('Invalid my complaints response');
+      }
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        throw Exception(
+          map['message']?.toString() ??
+              'Failed to load complaints (${response.statusCode})',
+        );
+      }
+
+      if (!ApiEnvelope.indicatesSuccess(map)) {
+        throw Exception(ApiEnvelope.message(map));
+      }
+
+      final data = ApiEnvelope.data(map);
+      if (data is! Map) {
+        return const MyComplaintsPageResult(total: 0, records: []);
+      }
+
+      final page = Map<String, dynamic>.from(data);
+      final total = (page['total'] as num?)?.toInt() ?? 0;
+      final rawRecords = page['records'];
+      final storedUser = await _auth.getStoredUser();
+      final currentUserId = storedUser?.id ?? '';
+
+      final records = <Complaint>[];
+      if (rawRecords is List) {
+        for (final item in rawRecords) {
+          if (item is Map) {
+            records.add(
+              Complaint.fromApiMap(
+                Map<String, dynamic>.from(item),
+                currentUserId: currentUserId,
+                markAsOwnSubmission: true,
+              ),
+            );
+          }
+        }
+      }
+
+      return MyComplaintsPageResult(total: total, records: records);
+    } on TimeoutException {
+      throw Exception('My complaints request timed out');
+    } on http.ClientException catch (e) {
+      throw Exception('Could not load complaints: ${e.message}');
+    }
+  }
+
+  /// Loads the current user's complaints from the backend.
+  Future<List<Complaint>> getComplaints({SearchParam? searchParam}) async {
+    final page = await listMyComplaints(searchParam: searchParam);
+    return page.records;
   }
 
   /// `GET /municipality/category/list` — returns parsed categories from envelope `data`.

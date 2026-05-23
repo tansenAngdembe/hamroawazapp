@@ -1,3 +1,5 @@
+import '../core/constants/api_constants.dart';
+
 enum ComplaintStatus {
   pending,
   inProgress,
@@ -98,6 +100,8 @@ ComplaintCategory complaintCategoryFromApiId(String? id) {
 ComplaintStatus complaintStatusFromApi(String? raw) {
   if (raw == null || raw.isEmpty) return ComplaintStatus.pending;
   switch (raw.toUpperCase().replaceAll(' ', '')) {
+    case 'NEW':
+      return ComplaintStatus.pending;
     case 'PENDING':
       return ComplaintStatus.pending;
     case 'INPROGRESS':
@@ -112,6 +116,40 @@ ComplaintStatus complaintStatusFromApi(String? raw) {
     default:
       return ComplaintStatus.pending;
   }
+}
+
+/// Backend `param.status` value for [SearchParam].
+String complaintStatusToApiParam(ComplaintStatus status) {
+  switch (status) {
+    case ComplaintStatus.pending:
+      return 'NEW';
+    case ComplaintStatus.inProgress:
+      return 'IN_PROGRESS';
+    case ComplaintStatus.resolved:
+      return 'RESOLVED';
+    case ComplaintStatus.escalated:
+      return 'ESCALATED';
+  }
+}
+
+DateTime? parseApiDateTime(dynamic raw) {
+  if (raw is List && raw.length >= 3) {
+    try {
+      final y = (raw[0] as num).toInt();
+      final m = (raw[1] as num).toInt();
+      final d = (raw[2] as num).toInt();
+      final h = raw.length > 3 ? (raw[3] as num).toInt() : 0;
+      final min = raw.length > 4 ? (raw[4] as num).toInt() : 0;
+      final sec = raw.length > 5 ? (raw[5] as num).toInt() : 0;
+      return DateTime(y, m, d, h, min, sec);
+    } catch (_) {
+      return null;
+    }
+  }
+  if (raw is String && raw.isNotEmpty) {
+    return DateTime.tryParse(raw);
+  }
+  return null;
 }
 
 class Complaint {
@@ -138,6 +176,8 @@ class Complaint {
   final String? categoryIdStr;
   /// Display label from API (`categoryName`), when available.
   final String? categoryLabel;
+  /// Status description from API (`status.description`).
+  final String? statusLabel;
 
   Complaint({
     required this.id,
@@ -160,6 +200,7 @@ class Complaint {
     this.isOwnSubmission = false,
     this.categoryIdStr,
     this.categoryLabel,
+    this.statusLabel,
   });
 
   Complaint copyWith({
@@ -183,6 +224,7 @@ class Complaint {
     bool? isOwnSubmission,
     String? categoryIdStr,
     String? categoryLabel,
+    String? statusLabel,
   }) {
     return Complaint(
       id: id ?? this.id,
@@ -205,15 +247,18 @@ class Complaint {
       isOwnSubmission: isOwnSubmission ?? this.isOwnSubmission,
       categoryIdStr: categoryIdStr ?? this.categoryIdStr,
       categoryLabel: categoryLabel ?? this.categoryLabel,
+      statusLabel: statusLabel ?? this.statusLabel,
     );
   }
 
-  /// Parses one complaint object as returned by create / update / list nearby.
+  /// Parses one complaint object as returned by create / update / list / my complaints.
   factory Complaint.fromApiMap(
     Map<String, dynamic> json, {
     String currentUserId = '',
+    bool markAsOwnSubmission = false,
   }) {
-    final id = json['complaintUniqueId']?.toString() ??
+    final id = json['uniqueId']?.toString() ??
+        json['complaintUniqueId']?.toString() ??
         json['id']?.toString() ??
         json['_id']?.toString() ??
         '';
@@ -223,14 +268,36 @@ class Complaint {
         json['description']?.toString() ??
         '';
     final catId = json['categoryId']?.toString();
-    final catLabel = json['categoryName']?.toString();
+    var catLabel = json['categoryName']?.toString();
+    final categoryObj = json['category'];
+    if (categoryObj is Map) {
+      final cat = Map<String, dynamic>.from(categoryObj);
+      final name = cat['name']?.toString();
+      final desc = cat['description']?.toString();
+      if (name != null && name.isNotEmpty) {
+        catLabel = name;
+      } else if (desc != null && desc.isNotEmpty) {
+        catLabel = desc;
+      }
+    }
     final category = complaintCategoryFromApiId(catId);
     final dept = json['municipality']?.toString() ??
         json['department']?.toString() ??
         json['municipalityName']?.toString() ??
         '';
-    final status =
-        complaintStatusFromApi(json['status']?.toString() ?? json['complaintStatus']?.toString());
+
+    String? statusRaw;
+    String? statusDescription;
+    final statusObj = json['status'];
+    if (statusObj is Map) {
+      final st = Map<String, dynamic>.from(statusObj);
+      statusRaw = st['name']?.toString();
+      statusDescription = st['description']?.toString();
+    } else {
+      statusRaw =
+          json['status']?.toString() ?? json['complaintStatus']?.toString();
+    }
+    final status = complaintStatusFromApi(statusRaw);
     final coords = json['complaintCoordinates'];
     double? lat = (json['latitude'] as num?)?.toDouble();
     double? lng = (json['longitude'] as num?)?.toDouble();
@@ -242,7 +309,8 @@ class Complaint {
     final userId =
         json['userId']?.toString() ?? json['submittedByUserId']?.toString() ?? '';
 
-    var isOwn = json['isOwnSubmission'] == true ||
+    var isOwn = markAsOwnSubmission ||
+        json['isOwnSubmission'] == true ||
         json['ownComplaint'] == true ||
         json['isMine'] == true ||
         json['highlight'] == true ||
@@ -252,19 +320,22 @@ class Complaint {
       isOwn = true;
     }
 
-    final created = DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
+    final created = parseApiDateTime(json['createdDate']) ??
+        DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
         DateTime.tryParse(json['createdDate']?.toString() ?? '') ??
         DateTime.now();
     final updated = DateTime.tryParse(json['updatedAt']?.toString() ?? '');
 
     final images = <String>[];
     final pu = json['photoUrl']?.toString();
-    if (pu != null && pu.isNotEmpty) images.add(pu);
+    if (pu != null && pu.isNotEmpty) {
+      images.add(ApiConstants.resolveMediaUrl(pu));
+    }
     final listUrl = json['imageUrls'];
     if (listUrl is List) {
       for (final e in listUrl) {
         final s = e.toString();
-        if (s.isNotEmpty) images.add(s);
+        if (s.isNotEmpty) images.add(ApiConstants.resolveMediaUrl(s));
       }
     }
 
@@ -285,6 +356,7 @@ class Complaint {
       isOwnSubmission: isOwn,
       categoryIdStr: catId,
       categoryLabel: catLabel,
+      statusLabel: statusDescription,
     );
   }
 
@@ -310,6 +382,7 @@ class Complaint {
       'isOwnSubmission': isOwnSubmission,
       'categoryIdStr': categoryIdStr,
       'categoryLabel': categoryLabel,
+      'statusLabel': statusLabel,
     };
   }
 
@@ -341,6 +414,7 @@ class Complaint {
       isOwnSubmission: json['isOwnSubmission'] == true,
       categoryIdStr: json['categoryIdStr']?.toString(),
       categoryLabel: json['categoryLabel']?.toString(),
+      statusLabel: json['statusLabel']?.toString(),
     );
   }
 
@@ -367,6 +441,9 @@ class Complaint {
   }
 
   String get statusName {
+    if (statusLabel != null && statusLabel!.isNotEmpty) {
+      return statusLabel!;
+    }
     switch (status) {
       case ComplaintStatus.pending:
         return 'Pending';
